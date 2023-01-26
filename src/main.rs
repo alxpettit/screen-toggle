@@ -10,6 +10,9 @@
 // Do not learn from me, kids
 // I am not a good role model.
 
+use futures::executor::block_on;
+use futures_signals::signal;
+use futures_signals::signal::{Mutable, SignalExt};
 use rdev::EventType::{KeyPress, KeyRelease};
 use rdev::Key::{Alt, AltGr, ControlLeft, ControlRight, Insert, KeyD, KeyE, KeyS, ShiftLeft};
 use rdev::{listen, Event, Key};
@@ -17,7 +20,8 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::Receiver;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -78,28 +82,23 @@ impl ScreenStateEnforcer {
         let state_ptr = state.clone();
         let mut old_state_ptr = old_state.clone();
         let update = thread::spawn(move || loop {
-            match state_ptr.is_on() {
-                true => {
-                    // Debounce against previous state so we only send if state has changed
-                    if state_ptr != old_state_ptr {
-                        // Send command to turn screen on
-                        Self::send_on_cmd().expect("Could not send.");
-                        old_state_ptr.set_from(&state_ptr);
-                    }
-                }
-                false => {
-                    while state_ptr.is_off() {
-                        // Now we turn off the screens over and over EVERY 100 MS
-                        // faster than whatever's turning them on can act
-                        // Yes, this is horrifying.
-                        // Yes, I don't care.
-                        // Fuck off.
-                        Self::send_off_cmd().expect("Could not send.");
-                        thread::sleep(Duration::from_millis(100));
-                    }
-                }
-            };
-            thread::sleep(Duration::from_millis(10));
+            while state_ptr.is_off() {
+                // Now we turn off the screens over and over EVERY 100 MS
+                // faster than whatever's turning them on can act
+                // Yes, this is horrifying.
+                // Yes, I don't care.
+                // Fuck off.
+                Self::send_off_cmd().expect("Could not send.");
+                thread::sleep(Duration::from_millis(50));
+            }
+            // only reachable once state_ptr becomes on, we we assume that
+            // Debounce against previous state so we only send if state has changed
+            if state_ptr != old_state_ptr {
+                // Send command to turn screen on
+                Self::send_on_cmd().expect("Could not send.");
+                old_state_ptr.set_from(&state_ptr);
+            }
+            thread::sleep(Duration::from_millis(50));
         });
 
         Self {
@@ -111,6 +110,7 @@ impl ScreenStateEnforcer {
 
     /// Send command to turn screen off
     fn send_off_cmd() -> Result<Output, Box<dyn Error>> {
+        println!("send_off_cmd()");
         Ok(Command::new("xset")
             .arg("dpms")
             .arg("force")
@@ -121,6 +121,7 @@ impl ScreenStateEnforcer {
 
     /// Send command to turn screen on
     fn send_on_cmd() -> Result<Output, Box<dyn Error>> {
+        println!("send_on_cmd()");
         Ok(Command::new("xset")
             .arg("dpms")
             .arg("force")
@@ -172,22 +173,32 @@ impl KeyStates {
 struct KeyboardState {
     update: JoinHandle<()>,
     states: KeyStates,
+    //rx: Receiver<()>,
+    updated: Mutable<bool>,
 }
 
 impl KeyboardState {
     fn new() -> Self {
+        let updated = Mutable::new(false);
+        let updated_ptr = updated.clone();
+        // let (tx, rx) = mpsc::channel::<()>();
         let states = KeyStates::new();
         let states_ptr = states.clone();
-        let callback = move |event: Event| match event {
-            Event {
-                time: _,
-                name: _,
-                event_type,
-            } => match event_type {
-                KeyPress(key) => states_ptr.set_state(&key, KeyState::Pressed),
-                KeyRelease(key) => states_ptr.set_state(&key, KeyState::Released),
-                _ => {}
-            },
+        let callback = move |event: Event| {
+            updated_ptr.set(true);
+            // tx.send(()).expect("Couldn't send notice of new event");
+
+            match event {
+                Event {
+                    time: _,
+                    name: _,
+                    event_type,
+                } => match event_type {
+                    KeyPress(key) => states_ptr.set_state(&key, KeyState::Pressed),
+                    KeyRelease(key) => states_ptr.set_state(&key, KeyState::Released),
+                    _ => {}
+                },
+            }
         };
 
         let update = thread::spawn(move || {
@@ -196,7 +207,17 @@ impl KeyboardState {
             }
         });
 
-        Self { update, states }
+        Self {
+            update,
+            states,
+            updated,
+        }
+    }
+
+    fn wait_until_next(&self) {
+        block_on(self.updated.signal().wait_for(true));
+        self.updated.set(false);
+        //self.rx.recv().expect("Sender hung up :c");
     }
 }
 
@@ -207,9 +228,7 @@ fn main() {
     let mut ssenforcer = ScreenStateEnforcer::new();
     let mut time_since_last_toggle = Instant::now();
     loop {
-        // Disgusting but effective
-        // FYI the correct way to do this is via a callback
-        // so that it's not constantly wasting CPU
+        kb.wait_until_next();
         match (
             kb.states.get_state(ControlLeft),
             kb.states.get_state(Alt),
@@ -217,6 +236,7 @@ fn main() {
         ) {
             (KeyState::Pressed, KeyState::Pressed, KeyState::Pressed) => {
                 if time_since_last_toggle.elapsed().as_millis() > DEBOUNCE_MS {
+                    println!("Toggle");
                     ssenforcer.state.toggle();
                     time_since_last_toggle = Instant::now();
                 }
