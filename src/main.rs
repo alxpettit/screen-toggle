@@ -11,7 +11,6 @@
 // I am not a good role model.
 
 use futures::executor::block_on;
-use futures_signals::signal;
 use futures_signals::signal::{Mutable, SignalExt};
 use rdev::EventType::{KeyPress, KeyRelease};
 use rdev::Key::{Alt, AltGr, ControlLeft, ControlRight, Insert, KeyD, KeyE, KeyS, ShiftLeft};
@@ -20,9 +19,9 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Receiver;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
+use tokio::sync::Mutex;
 //use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
@@ -91,7 +90,7 @@ impl ScreenStateEnforcer {
                     // Yes, this is horrifying.
                     // Yes, I don't care.
                     // Fuck off.
-                    Self::send_off_cmd().expect("Could not send.");
+                    Self::send_off_cmd().await.expect("Could not send.");
                     sleep(Duration::from_millis(50)).await;
                 }
                 // only reachable once state_ptr becomes on, we we assume that
@@ -100,7 +99,7 @@ impl ScreenStateEnforcer {
                     // Send this command 100 times because I don't trust anyone else's code but my own
                     for _ in 0..100 {
                         // Send command to turn screen on
-                        Self::send_on_cmd().expect("Could not send.");
+                        Self::send_on_cmd().await.expect("Could not send.");
                         thread::sleep(Duration::from_millis(100));
                     }
                     old_state_ptr.set_from(&state_ptr);
@@ -119,7 +118,7 @@ impl ScreenStateEnforcer {
     }
 
     /// Send command to turn screen off
-    fn send_off_cmd() -> Result<Output, Box<dyn Error>> {
+    async fn send_off_cmd() -> Result<Output, Box<dyn Error>> {
         //println!("send_off_cmd()");
         Ok(Command::new("xset")
             .arg("dpms")
@@ -130,7 +129,7 @@ impl ScreenStateEnforcer {
     }
 
     /// Send command to turn screen on
-    fn send_on_cmd() -> Result<Output, Box<dyn Error>> {
+    async fn send_on_cmd() -> Result<Output, Box<dyn Error>> {
         //println!("send_on_cmd()");
         Ok(Command::new("xset")
             .arg("dpms")
@@ -160,22 +159,17 @@ impl Clone for KeyStates {
 // As it would probably be easy for the API-user to end up with deadlocks and be very confused ;)
 
 impl KeyStates {
-    fn new() -> Self {
-        let mut map = HashMap::new();
+    async fn new() -> Self {
+        let map = HashMap::new();
         Self(Arc::new(Mutex::new(map)))
     }
 
-    fn get_state(&self, key: Key) -> KeyState {
-        *self
-            .0
-            .lock()
-            .unwrap() // ah yes, 500 unwrap() in your codebase
-            .entry(key) // truly masterful programming quality
-            .or_insert(KeyState::Released)
+    async fn get_state(&self, key: Key) -> KeyState {
+        *self.0.lock().await.entry(key).or_insert(KeyState::Released)
     }
 
-    fn set_state(&self, key: &Key, state: KeyState) {
-        *self.0.lock().unwrap().entry(*key).or_insert(state) = state;
+    async fn set_state(&self, key: &Key, state: KeyState) {
+        *self.0.lock().await.entry(*key).or_insert(state) = state;
     }
 }
 
@@ -192,9 +186,9 @@ impl KeyboardState {
         let updated = Mutable::new(false);
         let updated_ptr = updated.clone();
         // let (tx, rx) = mpsc::channel::<()>();
-        let states = KeyStates::new();
+        let states = KeyStates::new().await;
         let states_ptr = states.clone();
-        let callback = move |event: Event| {
+        let mut callback = |event: Event| async move {
             updated_ptr.set(true);
             // tx.send(()).expect("Couldn't send notice of new event");
 
@@ -204,15 +198,18 @@ impl KeyboardState {
                     name: _,
                     event_type,
                 } => match event_type {
-                    KeyPress(key) => states_ptr.set_state(&key, KeyState::Pressed),
-                    KeyRelease(key) => states_ptr.set_state(&key, KeyState::Released),
+                    KeyPress(key) => states_ptr.set_state(&key, KeyState::Pressed).await,
+                    KeyRelease(key) => states_ptr.set_state(&key, KeyState::Released).await,
                     _ => {}
                 },
-            }
+            };
+        };
+        let mut callback_sync = move |c| {
+            block_on(callback(c));
         };
 
         let run_update = async move {
-            if let Err(error) = listen(callback) {
+            if let Err(error) = listen(callback_sync) {
                 eprintln!("Error: {:?}", error)
             }
         };
@@ -243,9 +240,9 @@ async fn main() {
     loop {
         kb.wait_until_next();
         match (
-            kb.states.get_state(ControlLeft),
-            kb.states.get_state(Alt),
-            kb.states.get_state(KeyD),
+            kb.states.get_state(ControlLeft).await,
+            kb.states.get_state(Alt).await,
+            kb.states.get_state(KeyD).await,
         ) {
             (KeyState::Pressed, KeyState::Pressed, KeyState::Pressed) => {
                 if time_since_last_toggle.elapsed().as_millis() > DEBOUNCE_MS {
