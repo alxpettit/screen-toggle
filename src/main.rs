@@ -188,7 +188,7 @@ struct KeyboardState {
 }
 
 impl KeyboardState {
-    fn new() -> Self {
+    async fn new() -> Self {
         let updated = Mutable::new(false);
         let updated_ptr = updated.clone();
         // let (tx, rx) = mpsc::channel::<()>();
@@ -237,7 +237,7 @@ static DEBOUNCE_MS: u128 = 1500;
 
 #[tokio::main]
 async fn main() {
-    let kb = KeyboardState::new();
+    let kb = KeyboardState::new().await;
     let mut ssenforcer = ScreenStateEnforcer::new().await;
     let mut time_since_last_toggle = Instant::now();
     loop {
