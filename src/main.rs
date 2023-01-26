@@ -225,7 +225,7 @@ impl KeyboardState {
     }
 }
 
-static DEBOUNCE_MS: u128 = 500;
+static DEBOUNCE_MS: u128 = 1500;
 
 fn main() {
     let kb = KeyboardState::new();
