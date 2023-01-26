@@ -188,7 +188,7 @@ impl KeyboardState {
         // let (tx, rx) = mpsc::channel::<()>();
         let states = KeyStates::new().await;
         let states_ptr = states.clone();
-        let mut callback = |event: Event| async move {
+        let callback = move |event: Event| {
             updated_ptr.set(true);
             // tx.send(()).expect("Couldn't send notice of new event");
 
@@ -198,18 +198,15 @@ impl KeyboardState {
                     name: _,
                     event_type,
                 } => match event_type {
-                    KeyPress(key) => states_ptr.set_state(&key, KeyState::Pressed).await,
-                    KeyRelease(key) => states_ptr.set_state(&key, KeyState::Released).await,
+                    KeyPress(key) => block_on(states_ptr.set_state(&key, KeyState::Pressed)),
+                    KeyRelease(key) => block_on(states_ptr.set_state(&key, KeyState::Released)),
                     _ => {}
                 },
             };
         };
-        let mut callback_sync = move |c| {
-            block_on(callback(c));
-        };
 
         let run_update = async move {
-            if let Err(error) = listen(callback_sync) {
+            if let Err(error) = listen(callback) {
                 eprintln!("Error: {:?}", error)
             }
         };
