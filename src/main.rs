@@ -94,8 +94,12 @@ impl ScreenStateEnforcer {
             // only reachable once state_ptr becomes on, we we assume that
             // Debounce against previous state so we only send if state has changed
             if state_ptr != old_state_ptr {
-                // Send command to turn screen on
-                Self::send_on_cmd().expect("Could not send.");
+                // Send this command 5 times because I don't trust anyone else's code but my own
+                for _ in 0..5 {
+                    // Send command to turn screen on
+                    Self::send_on_cmd().expect("Could not send.");
+                    thread::sleep(Duration::from_millis(100));
+                }
                 old_state_ptr.set_from(&state_ptr);
             }
             thread::sleep(Duration::from_millis(50));
