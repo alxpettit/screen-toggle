@@ -99,6 +99,7 @@ impl ScreenStateEnforcer {
                     }
                 }
             };
+            thread::sleep(Duration::from_millis(10));
         });
 
         Self {
