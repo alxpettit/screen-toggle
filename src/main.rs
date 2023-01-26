@@ -114,7 +114,7 @@ impl ScreenStateEnforcer {
 
     /// Send command to turn screen off
     fn send_off_cmd() -> Result<Output, Box<dyn Error>> {
-        println!("send_off_cmd()");
+        //println!("send_off_cmd()");
         Ok(Command::new("xset")
             .arg("dpms")
             .arg("force")
@@ -125,7 +125,7 @@ impl ScreenStateEnforcer {
 
     /// Send command to turn screen on
     fn send_on_cmd() -> Result<Output, Box<dyn Error>> {
-        println!("send_on_cmd()");
+        //println!("send_on_cmd()");
         Ok(Command::new("xset")
             .arg("dpms")
             .arg("force")
@@ -240,7 +240,7 @@ fn main() {
         ) {
             (KeyState::Pressed, KeyState::Pressed, KeyState::Pressed) => {
                 if time_since_last_toggle.elapsed().as_millis() > DEBOUNCE_MS {
-                    println!("Toggle");
+                    //println!("Toggle");
                     ssenforcer.state.toggle();
                     time_since_last_toggle = Instant::now();
                 }
