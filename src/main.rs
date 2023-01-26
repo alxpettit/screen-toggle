@@ -23,8 +23,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::thread::JoinHandle;
+//use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
 
 struct ScreenState(Arc<AtomicBool>);
 
@@ -75,35 +77,39 @@ struct ScreenStateEnforcer {
 }
 
 impl ScreenStateEnforcer {
-    fn new() -> Self {
+    async fn new() -> Self {
         let state = ScreenState::new();
         let old_state = ScreenState::new();
 
         let state_ptr = state.clone();
         let mut old_state_ptr = old_state.clone();
-        let update = thread::spawn(move || loop {
-            while state_ptr.is_off() {
-                // Now we turn off the screens over and over EVERY 100 MS
-                // faster than whatever's turning them on can act
-                // Yes, this is horrifying.
-                // Yes, I don't care.
-                // Fuck off.
-                Self::send_off_cmd().expect("Could not send.");
-                thread::sleep(Duration::from_millis(50));
-            }
-            // only reachable once state_ptr becomes on, we we assume that
-            // Debounce against previous state so we only send if state has changed
-            if state_ptr != old_state_ptr {
-                // Send this command 100 times because I don't trust anyone else's code but my own
-                for _ in 0..100 {
-                    // Send command to turn screen on
-                    Self::send_on_cmd().expect("Could not send.");
-                    thread::sleep(Duration::from_millis(100));
+        let update_future = || async move {
+            loop {
+                while state_ptr.is_off() {
+                    // Now we turn off the screens over and over EVERY 100 MS
+                    // faster than whatever's turning them on can act
+                    // Yes, this is horrifying.
+                    // Yes, I don't care.
+                    // Fuck off.
+                    Self::send_off_cmd().expect("Could not send.");
+                    sleep(Duration::from_millis(50)).await;
                 }
-                old_state_ptr.set_from(&state_ptr);
+                // only reachable once state_ptr becomes on, we we assume that
+                // Debounce against previous state so we only send if state has changed
+                if state_ptr != old_state_ptr {
+                    // Send this command 100 times because I don't trust anyone else's code but my own
+                    for _ in 0..100 {
+                        // Send command to turn screen on
+                        Self::send_on_cmd().expect("Could not send.");
+                        thread::sleep(Duration::from_millis(100));
+                    }
+                    old_state_ptr.set_from(&state_ptr);
+                }
+                sleep(Duration::from_millis(50)).await;
             }
-            thread::sleep(Duration::from_millis(50));
-        });
+        };
+
+        let update = tokio::spawn(update_future());
 
         Self {
             state,
@@ -205,11 +211,13 @@ impl KeyboardState {
             }
         };
 
-        let update = thread::spawn(move || {
+        let run_update = async move {
             if let Err(error) = listen(callback) {
                 eprintln!("Error: {:?}", error)
             }
-        });
+        };
+
+        let update = tokio::spawn(run_update);
 
         Self {
             update,
@@ -227,9 +235,10 @@ impl KeyboardState {
 
 static DEBOUNCE_MS: u128 = 1500;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let kb = KeyboardState::new();
-    let mut ssenforcer = ScreenStateEnforcer::new();
+    let mut ssenforcer = ScreenStateEnforcer::new().await;
     let mut time_since_last_toggle = Instant::now();
     loop {
         kb.wait_until_next();
@@ -247,6 +256,6 @@ fn main() {
             }
             _ => {}
         }
-        thread::sleep(Duration::from_millis(10));
+        sleep(Duration::from_millis(10)).await;
     }
 }
